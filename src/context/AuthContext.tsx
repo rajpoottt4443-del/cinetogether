@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User } from '../types';
 import { api } from '../services/api';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 interface LockoutState {
   isLocked: boolean;
@@ -35,18 +36,129 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     remainingSeconds: 0
   });
 
-  // Load initial session
+  // Load initial session & listen for Supabase OAuth redirect callbacks
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        setUser(JSON.parse(saved));
+    let mounted = true;
+
+    async function initSession() {
+      // 1. Check local session storage first for instant load
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved && mounted) {
+          setUser(JSON.parse(saved));
+        }
+      } catch (e) {
+        console.error('Failed to parse local session', e);
       }
-    } catch (e) {
-      console.error('Failed to parse local session', e);
-    } finally {
-      setIsLoading(false);
+
+      // 2. If Supabase is configured, check live session and listen to auth changes
+      const activeClient = supabase;
+      if (isSupabaseConfigured && activeClient) {
+        try {
+          const { data: { session } } = await activeClient.auth.getSession();
+          if (session?.user && mounted) {
+            const { data: profile } = await activeClient
+              .from('profiles')
+              .select('*')
+              .eq('id', session.user.id)
+              .maybeSingle();
+
+            const displayName =
+              profile?.username ||
+              session.user.user_metadata?.full_name ||
+              session.user.user_metadata?.username ||
+              session.user.email?.split('@')[0] ||
+              'Film Fan';
+
+            const avatarUrl =
+              profile?.avatar_url ||
+              session.user.user_metadata?.avatar_url ||
+              session.user.user_metadata?.picture ||
+              `https://api.dicebear.com/7.x/bottts/svg?seed=${session.user.id}`;
+
+            const activeUser: User = {
+              id: session.user.id,
+              userId: 'CT-' + session.user.id.substring(0, 8).toUpperCase(),
+              email: session.user.email || '',
+              displayName,
+              avatar: avatarUrl,
+              createdAt: session.user.created_at || new Date().toISOString(),
+              ageConfirmed: true,
+              ageConfirmedAt: new Date().toISOString(),
+              isGoogleLinked: session.user.app_metadata?.provider === 'google',
+              role: (profile?.role as any) || 'user',
+              status: 'online',
+              twoFactorEnabled: false,
+              failedLoginAttempts: 0,
+              lockedUntil: null
+            };
+
+            setUser(activeUser);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(activeUser));
+          }
+        } catch (err) {
+          console.warn('[CineTogether] Supabase getSession error:', err);
+        }
+
+        // Listen for live OAuth changes
+        const { data: { subscription } } = activeClient.auth.onAuthStateChange(async (event, session) => {
+          if (event === 'SIGNED_IN' && session?.user && mounted) {
+            const { data: profile } = await activeClient
+              .from('profiles')
+              .select('*')
+              .eq('id', session.user.id)
+              .maybeSingle();
+
+            const displayName =
+              profile?.username ||
+              session.user.user_metadata?.full_name ||
+              session.user.user_metadata?.username ||
+              session.user.email?.split('@')[0] ||
+              'Film Fan';
+
+            const avatarUrl =
+              profile?.avatar_url ||
+              session.user.user_metadata?.avatar_url ||
+              session.user.user_metadata?.picture ||
+              `https://api.dicebear.com/7.x/bottts/svg?seed=${session.user.id}`;
+
+            const activeUser: User = {
+              id: session.user.id,
+              userId: 'CT-' + session.user.id.substring(0, 8).toUpperCase(),
+              email: session.user.email || '',
+              displayName,
+              avatar: avatarUrl,
+              createdAt: session.user.created_at || new Date().toISOString(),
+              ageConfirmed: true,
+              ageConfirmedAt: new Date().toISOString(),
+              isGoogleLinked: session.user.app_metadata?.provider === 'google',
+              role: (profile?.role as any) || 'user',
+              status: 'online',
+              twoFactorEnabled: false,
+              failedLoginAttempts: 0,
+              lockedUntil: null
+            };
+
+            setUser(activeUser);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(activeUser));
+          } else if (event === 'SIGNED_OUT' && mounted) {
+            setUser(null);
+            localStorage.removeItem(STORAGE_KEY);
+          }
+        });
+
+        return () => {
+          subscription.unsubscribe();
+        };
+      }
+
+      if (mounted) setIsLoading(false);
     }
+
+    initSession();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   // Cooldown countdown timer
@@ -115,6 +227,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    if (isSupabaseConfigured && supabase) {
+      supabase.auth.signOut().catch(() => {});
+    }
     setUser(null);
     localStorage.removeItem(STORAGE_KEY);
   };

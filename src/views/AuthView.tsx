@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Film, Lock, Mail, User as UserIcon, ShieldAlert, CheckCircle2, AlertTriangle, ArrowRight, Clock, Key } from 'lucide-react';
+import { Film, Lock, Mail, User as UserIcon, ShieldAlert, CheckCircle2, AlertTriangle, ArrowRight, Clock, Key, ShieldCheck, Database } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
+import { isSupabaseConfigured } from '../lib/supabase';
 
 interface AuthViewProps {
   initialMode?: 'login' | 'register' | 'forgot';
@@ -51,7 +52,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ initialMode = 'login', onNav
         }
       }
     } catch (err: any) {
-      setErrorMessage(err.message || 'An error occurred. Please try again.');
+      setErrorMessage(err.message || 'An error occurred during authentication.');
     } finally {
       setIsSubmitting(false);
     }
@@ -98,6 +99,16 @@ export const AuthView: React.FC<AuthViewProps> = ({ initialMode = 'login', onNav
             {mode === 'register' && 'Get your unique permanent User ID and host unlimited rooms.'}
             {mode === 'forgot' && 'Reset your password and regain access to your party profile.'}
           </p>
+
+          {/* Infrastructure mode indicator */}
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-[11px] text-slate-300">
+            <Database className="w-3.5 h-3.5 text-[#397CB8]" />
+            <span>
+              {isSupabaseConfigured
+                ? 'Supabase Auth & PostgreSQL Active'
+                : 'Demo Session Active (Ready for Supabase)'}
+            </span>
+          </div>
         </div>
 
         {/* 5-ATTEMPT LOCKOUT WARNING BANNER */}
@@ -305,9 +316,19 @@ export const AuthView: React.FC<AuthViewProps> = ({ initialMode = 'login', onNav
         {mode === 'login' && (
           <div className="p-3 rounded-xl bg-[#071426]/70 border border-[#B5D5ED]/10 text-[11px] text-slate-400 space-y-1">
             <p className="font-semibold text-slate-300">Quick Test Credentials:</p>
-            <p>Admin: <code className="text-[#B5D5ED]">admin@cinetogether.com</code> / <code className="text-[#B5D5ED]">admin12345</code></p>
-            <p>Member: <code className="text-[#B5D5ED]">sarah.connor@cinetogether.com</code> / <code className="text-[#B5D5ED]">password123</code></p>
-            <p className="text-[10px] text-slate-500 pt-0.5">Tip: Enter 5 wrong passwords to test the automatic 15-minute lockout!</p>
+            <p
+              className="cursor-pointer hover:text-white transition-colors"
+              onClick={() => { setEmail('admin@cinetogether.com'); setPassword('admin12345'); }}
+            >
+              Admin: <code className="text-[#B5D5ED]">admin@cinetogether.com</code> / <code className="text-[#B5D5ED]">admin12345</code> (Click to fill)
+            </p>
+            <p
+              className="cursor-pointer hover:text-white transition-colors"
+              onClick={() => { setEmail('sarah.connor@cinetogether.com'); setPassword('password123'); }}
+            >
+              Member: <code className="text-[#B5D5ED]">sarah.connor@cinetogether.com</code> / <code className="text-[#B5D5ED]">password123</code> (Click to fill)
+            </p>
+            <p className="text-[10px] text-slate-500 pt-0.5">Tip: 5 consecutive failed passwords trigger an automatic 15-minute lockout!</p>
           </div>
         )}
 

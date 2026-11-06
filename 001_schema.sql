@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS public.security_logs (
 CREATE INDEX IF NOT EXISTS idx_security_logs_created_at ON public.security_logs(created_at DESC);
 
 -- ==============================================================
--- AUTOMATIC PROFILE TRIGGER (ON AUTH.USERS INSERT)
+-- AUTOMATIC PROFILE TRIGGER (ON AUTH.USERS INSERT FOR EMAIL & GOOGLE OAUTH)
 -- ==============================================================
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
@@ -67,18 +67,29 @@ BEGIN
   INSERT INTO public.profiles (id, username, avatar_url, role)
   VALUES (
     NEW.id,
-    COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1)),
-    COALESCE(NEW.raw_user_meta_data->>'avatar_url', 'https://api.dicebear.com/7.x/bottts/svg?seed=' || NEW.id),
+    COALESCE(
+      NEW.raw_user_meta_data->>'full_name',
+      NEW.raw_user_meta_data->>'name',
+      NEW.raw_user_meta_data->>'username',
+      split_part(NEW.email, '@', 1)
+    ),
+    COALESCE(
+      NEW.raw_user_meta_data->>'avatar_url',
+      NEW.raw_user_meta_data->>'picture',
+      'https://api.dicebear.com/7.x/bottts/svg?seed=' || NEW.id
+    ),
     COALESCE(NEW.raw_user_meta_data->>'role', 'user')
   )
-  ON CONFLICT (id) DO NOTHING;
+  ON CONFLICT (id) DO UPDATE SET
+    username = COALESCE(EXCLUDED.username, public.profiles.username),
+    avatar_url = COALESCE(EXCLUDED.avatar_url, public.profiles.avatar_url);
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
+  AFTER INSERT OR UPDATE ON auth.users
   FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
 
 -- ==============================================================
@@ -95,8 +106,14 @@ CREATE POLICY "Public profiles are viewable by anyone"
   ON public.profiles FOR SELECT 
   USING (true);
 
+CREATE POLICY "Users can insert their own profile"
+  ON public.profiles FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = id);
+
 CREATE POLICY "Users can update their own profile" 
   ON public.profiles FOR UPDATE 
+  TO authenticated
   USING (auth.uid() = id);
 
 -- ROOMS POLICIES

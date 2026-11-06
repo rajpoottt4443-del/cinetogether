@@ -1,25 +1,69 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Environment variables for Supabase
-const envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
-const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+// Environment variables for Supabase (support both Vite and Next.js naming)
+const rawUrl = (
+  import.meta.env.VITE_SUPABASE_URL ||
+  import.meta.env.NEXT_PUBLIC_SUPABASE_URL ||
+  ''
+).trim();
+
+const rawKey = (
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  ''
+).trim();
+
+/**
+ * Validate URL strictly before initializing the client to prevent unhandled runtime errors
+ */
+function isValidSupabaseUrl(urlStr: string): boolean {
+  if (!urlStr || urlStr.includes('your-project-id') || urlStr.includes('placeholder')) {
+    return false;
+  }
+  try {
+    const parsed = new URL(urlStr);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+function isValidSupabaseKey(keyStr: string): boolean {
+  return Boolean(
+    keyStr &&
+    !keyStr.includes('your-anon-public-key') &&
+    !keyStr.includes('placeholder') &&
+    keyStr.length > 20
+  );
+}
 
 export const isSupabaseConfigured = Boolean(
-  envUrl &&
-  envKey &&
-  !envUrl.includes('your-project-id') &&
-  !envKey.includes('your-anon-public-key')
+  isValidSupabaseUrl(rawUrl) && isValidSupabaseKey(rawKey)
 );
 
-export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(envUrl, envKey, {
+let supabaseInstance: SupabaseClient | null = null;
+
+if (isSupabaseConfigured) {
+  try {
+    supabaseInstance = createClient(rawUrl, rawKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true
+      },
       realtime: {
         params: {
           eventsPerSecond: 20
         }
       }
-    })
-  : null;
+    });
+  } catch (err) {
+    console.warn('[CineTogether] Supabase client initialization failed, falling back to local demo mode:', err);
+    supabaseInstance = null;
+  }
+}
+
+export const supabase = supabaseInstance;
 
 // Free public Google STUN servers (Zero external paid API)
 export const ICE_SERVERS: RTCIceServer[] = [
@@ -39,6 +83,33 @@ export async function hashPassword(password: string): Promise<string> {
 }
 
 /**
+ * Global Safe JSON Fetch Helper:
+ * Replaces direct response.json() calls with safe text parsing to prevent
+ * "Failed to execute 'json' on 'Response': Unexpected end of JSON input" errors.
+ */
+export async function safeFetchJson<T = any>(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<{ ok: boolean; status: number; data: T }> {
+  try {
+    const res = await fetch(input, init);
+    const text = await res.text();
+    let data: any = {};
+    if (text && text.trim().length > 0) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { rawText: text };
+      }
+    }
+    return { ok: res.ok, status: res.status, data };
+  } catch (err: any) {
+    console.warn('[CineTogether] Network fetch fallback:', err.message);
+    return { ok: false, status: 0, data: { error: err.message } as any };
+  }
+}
+
+/**
  * Universal Signaling & Broadcast Channel
  * Uses Supabase Realtime Broadcast if configured; otherwise seamlessly uses
  * browser BroadcastChannel for multi-tab zero-config local testing.
@@ -55,28 +126,36 @@ export class RoomSignalingChannel {
     this.roomCode = roomCode;
 
     if (isSupabaseConfigured && supabase) {
-      // Connect to Supabase Realtime Broadcast + Presence
-      this.supabaseChannel = supabase.channel(`room:${roomCode}`, {
-        config: { broadcast: { self: false } }
-      });
+      try {
+        // Connect to Supabase Realtime Broadcast + Presence
+        this.supabaseChannel = supabase.channel(`room:${roomCode}`, {
+          config: { broadcast: { self: false } }
+        });
 
-      this.supabaseChannel
-        .on('broadcast', { event: '*' }, (payload: any) => {
-          if (this.onEventHandler) {
-            this.onEventHandler(payload.event, payload.payload);
-          }
-        })
-        .on('presence', { event: 'sync' }, () => {
-          if (this.onPresenceHandler && this.supabaseChannel) {
-            const state = this.supabaseChannel.presenceState();
-            const list: any[] = [];
-            Object.keys(state).forEach(key => {
-              state[key].forEach((p: any) => list.push(p));
-            });
-            this.onPresenceHandler(list);
-          }
-        })
-        .subscribe();
+        this.supabaseChannel
+          .on('broadcast', { event: '*' }, (payload: any) => {
+            if (this.onEventHandler) {
+              this.onEventHandler(payload.event, payload.payload);
+            }
+          })
+          .on('presence', { event: 'sync' }, () => {
+            if (this.onPresenceHandler && this.supabaseChannel) {
+              const state = this.supabaseChannel.presenceState();
+              const list: any[] = [];
+              Object.keys(state).forEach(key => {
+                state[key].forEach((p: any) => list.push(p));
+              });
+              this.onPresenceHandler(list);
+            }
+          })
+          .subscribe((status: string) => {
+            if (status !== 'SUBSCRIBED' && status !== 'CLOSED') {
+              console.log(`[CineTogether] Supabase channel status: ${status}`);
+            }
+          });
+      } catch (err) {
+        console.warn('[CineTogether] Supabase channel subscribe failed, using BroadcastChannel:', err);
+      }
     }
 
     // Always instantiate native BroadcastChannel for fallback or same-browser tab testing
@@ -104,22 +183,32 @@ export class RoomSignalingChannel {
   public broadcast(event: string, payload: any) {
     // 1. Send via Supabase Realtime if connected
     if (this.supabaseChannel) {
-      this.supabaseChannel.send({
-        type: 'broadcast',
-        event,
-        payload
-      });
+      try {
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event,
+          payload
+        });
+      } catch (e) {
+        // quiet error
+      }
     }
 
     // 2. Mirror via local BroadcastChannel for local tab testing
     if (this.localBroadcast) {
-      this.localBroadcast.postMessage({ type: event, payload });
+      try {
+        this.localBroadcast.postMessage({ type: event, payload });
+      } catch (e) {
+        // quiet error
+      }
     }
   }
 
   public trackPresence(userState: any) {
     if (this.supabaseChannel) {
-      this.supabaseChannel.track(userState);
+      try {
+        this.supabaseChannel.track(userState);
+      } catch (e) {}
     }
     // Also track in local map
     this.currentPresence.set(userState.userId || userState.id, userState);
@@ -130,7 +219,9 @@ export class RoomSignalingChannel {
 
   public leavePresence(userId: string) {
     if (this.supabaseChannel) {
-      this.supabaseChannel.untrack();
+      try {
+        this.supabaseChannel.untrack();
+      } catch (e) {}
     }
     this.currentPresence.delete(userId);
     if (this.onPresenceHandler) {
@@ -140,11 +231,15 @@ export class RoomSignalingChannel {
 
   public close() {
     if (this.supabaseChannel && supabase) {
-      supabase.removeChannel(this.supabaseChannel);
+      try {
+        supabase.removeChannel(this.supabaseChannel);
+      } catch (e) {}
       this.supabaseChannel = null;
     }
     if (this.localBroadcast) {
-      this.localBroadcast.close();
+      try {
+        this.localBroadcast.close();
+      } catch (e) {}
       this.localBroadcast = null;
     }
   }
