@@ -1,0 +1,25 @@
+# ==============================================================
+# CineTogether Robots.txt - Google Search Central Compliant
+# ==============================================================
+
+User-agent: *
+Allow: /
+Allow: /watch-party-online
+Allow: /screen-sharing
+Allow: /watch-movies-together
+Allow: /group-video-chat
+Allow: /how-it-works
+Allow: /about
+Allow: /faq
+Allow: /contact
+Allow: /privacy-policy
+Allow: /terms-of-service
+Allow: /cookie-policy
+
+# Protect user privacy and prevent indexing of transient rooms
+Disallow: /party
+Disallow: /room/
+Disallow: /dashboard
+Disallow: /admin
+
+Sitemap: https://cinetogether.vercel.app/sitemap.xml

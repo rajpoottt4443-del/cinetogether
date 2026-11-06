@@ -1,0 +1,12 @@
+{
+  "name": "CineTogether",
+  "description": "Global watch-party and screen-sharing platform featuring synchronized video playback, WebRTC video calling, desktop & mobile screen sharing, and user account system.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
